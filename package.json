@@ -1,0 +1,10 @@
+{
+  "name": "socketio-node-su",
+  "version": "0.0.1",
+  "description": "my first socket.io app",
+  "dependencies": {
+    "express": "^4.19.2",
+    "jsonwebtoken": "^9.0.2",
+    "socket.io": "^4.7.5"
+  }
+}
