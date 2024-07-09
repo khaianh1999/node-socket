@@ -2,13 +2,18 @@ const express = require("express");
 const http = require("http");
 const socketIo = require("socket.io");
 
+// const usersRoutes = require('./src/routes/usersRoutes');
+// const db = require('./src/config/db'); // Ensure the database connection is initialized
+
 const app = express();
 const server = http.createServer(app);
 
-// const jwt = require('jsonwebtoken');
-// // jwt secret
-// const JWT_SECRET = 'myRandomHash';
+// app.use('/api', usersRoutes);
 
+const roomAll = {
+  maleRooms: new Map(),
+  femaleRooms: new Map(),
+};
 
 const io = socketIo(server, {
   cors: {
@@ -18,108 +23,94 @@ const io = socketIo(server, {
   },
 });
 
-// io.use(async (socket, next) => {
-//   console.log('socket', socket);
-//   // fetch token from handshake auth sent by FE
-//   const token = socket.handshake.auth.token;
-//   try {
-//     // verify jwt token and get user data
-//     const user = await jwt.verify(token, JWT_SECRET);
-//     console.log('user', user);
-//     // save the user data into socket object, to be used further
-//     socket.user = user;
-//     next();
-//   } catch (e) {
-//     // if token is invalid, close connection
-//     console.log('error', e.message);
-//     return next(new Error(e.message));
-//   }
-// });
-
 app.get("/", (req, res) => {
   res.send("<h1>Hey Socket.io</h1>");
 });
 
 io.on("connection", (socket) => {
-  console.log("1 thằng connect");
+  console.log("A user connected");
 
   socket.on("join", (inforUser, callback) => {
-    socket.join(inforUser.roomId); // join room
-    callback({ // notification
+    const { userId, userName, gender } = inforUser;
+    let joinedRoom = null;
+
+    // Chọn mục tiêu phòng ngược lại
+    const targetRooms = gender === 'male' ? roomAll.femaleRooms : roomAll.maleRooms;
+
+    // Tìm phòng của giới tính ngược lại có size là 1 để join vào
+    for (const [room, size] of targetRooms.entries()) {
+      if (size === 1) {
+        socket.join(room);
+        targetRooms.set(room, size + 1);
+        joinedRoom = room;
+        break;
+      }
+    }
+
+    // Nếu không tìm thấy phòng phù hợp, tạo phòng mới
+    if (!joinedRoom) {
+      joinedRoom = `${gender}-${Date.now()}`;
+      socket.join(joinedRoom);
+      const userRooms = gender === 'male' ? roomAll.maleRooms : roomAll.femaleRooms;
+      userRooms.set(joinedRoom, 1);
+    } else {
+      const userRooms = gender === 'male' ? roomAll.maleRooms : roomAll.femaleRooms;
+      userRooms.set(joinedRoom, 2); // Cập nhật phòng đã join với size 2
+    }
+
+    // Gửi phản hồi về việc join phòng
+    if (callback) callback({
       status: "join",
-      succes: true,
+      success: true,
+      roomId: joinedRoom,
     });
-    const outgoingMessage = {// data put to room
-      userName: inforUser.userName,
-      userId: inforUser.userId,
-      content: `Welcome ${inforUser.userName} !`,
+
+    const outgoingMessage = {
+      userName,
+      userId,
+      content: `Welcome ${userName} !`,
+      type: "welcome",
     };
-    // socket.to(inforUser.roomId).emit("message", outgoingMessage);
-    io.to(inforUser.roomId).emit('message', outgoingMessage); // emit to the room
+    io.to(joinedRoom).emit('message', outgoingMessage); // emit to the room
   });
 
   socket.on("client-send-message", (inforUser) => { // 1 message by client
-    console.log('msg xxx', inforUser);
-    io.to(inforUser.roomId).emit('server-send-message', inforUser); // emit to the room
-  });
-  return;
-
-  // socket.on("disconnect", () => {
-  //   console.log("user disconnected");
-  // });
-  // socket.on("my message", (msg) => {
-  //   io.emit("my broadcast", `server: ${msg}`);
-  // });
-
-
-  // join user's own room
-  // socket.join(socket.user.id);
-  socket.join('myRandomChatRoomId');
-  console.log("a user connected2");
-  socket.on("disconnect", () => {
-    console.log("user disconnected");
-  });
-  socket.on("my message", (msg) => {
-    console.log("message: " + msg);
-    io.emit("my broadcast", `server: ${msg}`);
+    console.log('msg:', inforUser);
+    io.to(inforUser.roomId).emit('server-send-message', {...inforUser, type: "message"}); // emit to the room
   });
 
- 
+  socket.on('disconnecting', () => {
+    console.log('socket.rooms', socket.rooms);
+    const roomsArray = Array.from(socket.rooms);
+    roomsArray.forEach((room) => {
+      if (room !== socket.id) {
+        const gender = room.startsWith('male') ? 'male' : 'female';
+        const userRooms = gender === 'male' ? roomAll.maleRooms : roomAll.femaleRooms;
 
-  socket.on("message", ({ message, roomName }, callback) => {
-    console.log("message: " + message + " in " + roomName);
-    // send socket to all in room except sender
-    socket.to(roomName).emit("message", message);
-    callback({
-      status: "ok"
+        if (userRooms.has(room)) {
+          userRooms.set(room, userRooms.get(room) - 1);
+          if (userRooms.get(room) === 0) {
+            userRooms.delete(room);
+          }
+        }
+
+        const numMembers = userRooms.get(room) || 0;
+        console.log(`Room ${room} left. Total members: ${numMembers}`);
+        const data = {
+          content: "Đối phương đã thoát khỏi phòng!",
+          roomId: room,
+          userName: "",
+          userId: "",
+          type: "disconnecting",
+        }
+        io.to(room).emit('server-disconnecting', data);
+      }
     });
-    const outgoingMessage = {
-      name: 'khaidaica',
-      id: 1,
-      message,
-    };
-    socket.to('myRandomChatRoomId').emit("message", outgoingMessage);
-    // send to all including sender
-    // io.to('myRandomChatRoomId').emit("message", outgoingMessage);
   });
-  // socket.on('message', ({message, roomName}, callback) => {
 
-  //   console.log("messagexxx: " + message + " in " + roomName);
-  
-  //   // generate data to send to receivers
-  //   const outgoingMessage = {
-  //     name: socket.user.name,
-  //     id: socket.user.id,
-  //     message,
-  //   };
-  //   // send socket to all in room except sender
-  //   socket.to(roomName).emit("message", outgoingMessage);
-  //   callback({
-  //     status: "ok"
-  //   });
-  //   // send to all including sender
-  //   // io.to(roomName).emit("message", message);
-  // });
+  socket.on('disconnect', () => {
+    console.log('A user disconnected');
+  });
 });
 
 server.listen(3001, () => {
